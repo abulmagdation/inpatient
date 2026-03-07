@@ -9,10 +9,10 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// 1. Database Connection  mongodb://localhost:27017/hospital_ward
+// 1. Database Connection (MongoDB Atlas)
 // ==========================================
-mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://abulmagd:Abulmagd610@cluster0.blq59le.mongodb.net/?appName=Cluster0/hospital_ward')
-  .then(() => console.log('✅ Connected to MongoDB'))
+mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://abulmagd:Abulmagd610@cluster0.blq59le.mongodb.net/hospital_ward?appName=Cluster0')
+  .then(() => console.log('✅ Connected to MongoDB Atlas'))
   .catch(err => console.error(err));
 
 // ==========================================
@@ -32,14 +32,8 @@ const roomSchema = new mongoose.Schema({
   beds: [bedSchema]
 }, { timestamps: true });
 
-roomSchema.pre('save', function(next) {
-  if (this.isNew && this.beds.length === 0) {
-    for (let i = 1; i <= this.totalBeds; i++) {
-      this.beds.push({ bedNumber: `${this.roomNumber}-${i}`, isOccupied: false, patient: null });
-    }
-  }
-  next();
-});
+// 💡 تم إزالة الـ roomSchema.pre('save') نهائياً لحل مشكلة next
+
 const Room = mongoose.model('Room', roomSchema);
 
 const tubeSchema = new mongoose.Schema({
@@ -100,6 +94,7 @@ const Task = mongoose.model('Task', taskSchema);
 // ==========================================
 
 app.get('/api/patients', async (req, res) => { res.json(await Patient.find().populate('room').sort('-createdAt')); });
+
 app.post('/api/patients', async (req, res) => {
   try {
     const newPatient = new Patient(req.body); await newPatient.save();
@@ -109,6 +104,7 @@ app.post('/api/patients', async (req, res) => {
     res.status(201).json(newPatient);
   } catch (error) { res.status(400).json({ error: error.message }); }
 });
+
 app.put('/api/patients/:id', async (req, res) => { try { res.json(await Patient.findByIdAndUpdate(req.params.id, req.body, { new: true })); } catch (error) { res.status(400).json({ error: error.message }); } });
 
 app.patch('/api/patients/:id/discharge', async (req, res) => {
@@ -155,8 +151,32 @@ app.post('/api/medications', async (req, res) => { try { const m = new Medicatio
 app.put('/api/medications/:id', async (req, res) => { try { res.json(await Medication.findByIdAndUpdate(req.params.id, req.body, {new: true})); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.delete('/api/medications/:id', async (req, res) => { await Medication.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
+// ==========================================
+// مسارات الغرف
+// ==========================================
 app.get('/api/rooms', async (req, res) => { res.json(await Room.find().populate('beds.patient')); });
-app.post('/api/rooms', async (req, res) => { try { const r = new Room(req.body); await r.save(); res.status(201).json(r); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+// 💡 التعديل الجذري هنا: توليد السراير بيحصل مباشرة وقت الـ POST
+app.post('/api/rooms', async (req, res) => { 
+  try { 
+    const roomData = req.body;
+    
+    // لو الغرفة بتتبعت من غير سراير، ننشئهم أوتوماتيك بناءً على totalBeds
+    if (!roomData.beds || roomData.beds.length === 0) {
+      roomData.beds = [];
+      const bedsCount = parseInt(roomData.totalBeds) || 1;
+      for (let i = 1; i <= bedsCount; i++) {
+        roomData.beds.push({ bedNumber: `${roomData.roomNumber}-${i}`, isOccupied: false, patient: null });
+      }
+    }
+
+    const r = new Room(roomData); 
+    await r.save(); 
+    res.status(201).json(r); 
+  } catch (e) { 
+    res.status(400).json({ error: e.message }); 
+  } 
+});
 
 app.put('/api/rooms/:id', async (req, res) => {
   try {

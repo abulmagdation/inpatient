@@ -13,12 +13,13 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/inpatient_db';
+// 🌐 تم إرجاع رابط قاعدة بيانات MongoDB Atlas الخاص بك
+const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://abulmagd:Abulmagd610@cluster0.blq59le.mongodb.net/hospital_ward?appName=Cluster0';
 const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key';
 
 // الاتصال بقاعدة البيانات
 mongoose.connect(MONGO_URI)
-  .then(() => console.log('✅ تم الاتصال بقاعدة البيانات بنجاح'))
+  .then(() => console.log('✅ تم الاتصال بقاعدة بيانات Atlas بنجاح'))
   .catch((err) => console.log('❌ خطأ في الاتصال بقاعدة البيانات:', err));
 
 // ==========================================
@@ -171,7 +172,7 @@ app.put('/api/users/theme', protect, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 💡 الدالة الجديدة الخاصة بتحديث البروفايل
+// الدالة الخاصة بتحديث البروفايل (تعديل الاسم، اسم المستخدم، وكلمة المرور)
 app.put('/api/users/profile', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);

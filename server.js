@@ -32,8 +32,6 @@ const roomSchema = new mongoose.Schema({
   beds: [bedSchema]
 }, { timestamps: true });
 
-// 💡 تم إزالة الـ roomSchema.pre('save') نهائياً لحل مشكلة next
-
 const Room = mongoose.model('Room', roomSchema);
 
 const tubeSchema = new mongoose.Schema({
@@ -93,30 +91,112 @@ const Task = mongoose.model('Task', taskSchema);
 // 3. API Routes
 // ==========================================
 
-app.get('/api/patients', async (req, res) => { res.json(await Patient.find().populate('room').sort('-createdAt')); });
-
-app.post('/api/patients', async (req, res) => {
-  try {
-    const newPatient = new Patient(req.body); await newPatient.save();
-    if (req.body.room && req.body.bedNumber) {
-      await Room.findOneAndUpdate({ _id: req.body.room, 'beds.bedNumber': req.body.bedNumber }, { $set: { 'beds.$.isOccupied': true, 'beds.$.patient': newPatient._id }, $inc: { occupiedBeds: 1 } });
-    }
-    res.status(201).json(newPatient);
-  } catch (error) { res.status(400).json({ error: error.message }); }
+app.get('/api/patients', async (req, res) => { 
+  res.json(await Patient.find().populate('room').sort('-createdAt')); 
 });
 
-app.put('/api/patients/:id', async (req, res) => { try { res.json(await Patient.findByIdAndUpdate(req.params.id, req.body, { new: true })); } catch (error) { res.status(400).json({ error: error.message }); } });
+// 💡 تعديل الإضافة: حماية التزامن مع الغرفة عشان ميطلعش إيرور للواجهة
+app.post('/api/patients', async (req, res) => {
+  try {
+    const newPatient = new Patient(req.body); 
+    await newPatient.save(); // بنحفظ العيان الأول بنجاح
+    
+    // تزامن الغرفة في بلوك منفصل عشان لو حصل فيه تأخير ميأثرش على الإضافة
+    if (req.body.room && req.body.bedNumber) {
+      try {
+        await Room.findOneAndUpdate(
+          { _id: req.body.room, 'beds.bedNumber': req.body.bedNumber }, 
+          { 
+            $set: { 'beds.$.isOccupied': true, 'beds.$.patient': newPatient._id }, 
+            $inc: { occupiedBeds: 1 } 
+          }
+        );
+      } catch (roomErr) {
+        console.error('خطأ في مزامنة الغرفة أثناء الإضافة:', roomErr);
+      }
+    }
+    res.status(201).json(newPatient);
+  } catch (error) { 
+    res.status(400).json({ error: error.message }); 
+  }
+});
 
+// 💡 تعديل التعديل الجذري: مراقبة تغيير الغرفة أو السرير لتحديث الداتا بيز للغرفتين (القديمة والجديدة)
+app.put('/api/patients/:id', async (req, res) => { 
+  try { 
+    // 1. نجيب بيانات العيان القديمة عشان نعرف كان في أي أوضة وسرير
+    const oldPatient = await Patient.findById(req.params.id);
+    if (!oldPatient) return res.status(404).json({ error: 'Patient not found' });
+
+    // 2. نحدث بيانات العيان بالبيانات الجديدة
+    const updatedPatient = await Patient.findByIdAndUpdate(req.params.id, req.body, { new: true }); 
+
+    // 3. نكتشف هل حصل تغيير في الغرفة أو السرير؟
+    const oldRoomId = oldPatient.room ? oldPatient.room.toString() : null;
+    const newRoomId = updatedPatient.room ? updatedPatient.room.toString() : null;
+    const oldBed = oldPatient.bedNumber;
+    const newBed = updatedPatient.bedNumber;
+
+    if (oldRoomId !== newRoomId || oldBed !== newBed) {
+      try {
+        // - فضّي السرير القديم ونقص الإشغال
+        if (oldRoomId && oldBed) {
+          await Room.findOneAndUpdate(
+            { _id: oldRoomId, 'beds.bedNumber': oldBed },
+            { 
+              $set: { 'beds.$.isOccupied': false, 'beds.$.patient': null }, 
+              $inc: { occupiedBeds: -1 } 
+            }
+          );
+        }
+        // - احجز السرير الجديد وزود الإشغال
+        if (newRoomId && newBed) {
+          await Room.findOneAndUpdate(
+            { _id: newRoomId, 'beds.bedNumber': newBed },
+            { 
+              $set: { 'beds.$.isOccupied': true, 'beds.$.patient': updatedPatient._id }, 
+              $inc: { occupiedBeds: 1 } 
+            }
+          );
+        }
+      } catch (syncErr) {
+        console.error('خطأ في مزامنة الغرف أثناء نقل المريض:', syncErr);
+      }
+    }
+
+    res.json(updatedPatient); 
+  } catch (error) { 
+    res.status(400).json({ error: error.message }); 
+  } 
+});
+
+// 💡 تعديل التسريح: تفريغ السرير من المريض
 app.patch('/api/patients/:id/discharge', async (req, res) => {
   try {
     const patient = await Patient.findById(req.params.id);
     if (!patient) return res.status(404).json({error: 'Patient not found'});
+    
+    // تفريغ السرير في الداتا بيز
     if (patient.room && patient.bedNumber) {
-      await Room.findOneAndUpdate({ _id: patient.room, 'beds.bedNumber': patient.bedNumber }, { $set: { 'beds.$.isOccupied': false, 'beds.$.patient': null }, $inc: { occupiedBeds: -1 } });
+      await Room.findOneAndUpdate(
+        { _id: patient.room, 'beds.bedNumber': patient.bedNumber }, 
+        { 
+          $set: { 'beds.$.isOccupied': false, 'beds.$.patient': null }, 
+          $inc: { occupiedBeds: -1 } 
+        }
+      );
     }
-    patient.status = 'discharged'; patient.dischargeDate = new Date();
-    await patient.save(); res.json(patient);
-  } catch (error) { res.status(400).json({ error: error.message }); }
+    
+    patient.status = 'discharged'; 
+    patient.dischargeDate = new Date();
+    patient.room = null; // نشيل الغرفة عشان ميتحسبش بالغلط
+    patient.bedNumber = null;
+
+    await patient.save(); 
+    res.json(patient);
+  } catch (error) { 
+    res.status(400).json({ error: error.message }); 
+  }
 });
 
 app.post('/api/reports/shift', async (req, res) => {
@@ -156,12 +236,10 @@ app.delete('/api/medications/:id', async (req, res) => { await Medication.findBy
 // ==========================================
 app.get('/api/rooms', async (req, res) => { res.json(await Room.find().populate('beds.patient')); });
 
-// 💡 التعديل الجذري هنا: توليد السراير بيحصل مباشرة وقت الـ POST
 app.post('/api/rooms', async (req, res) => { 
   try { 
     const roomData = req.body;
     
-    // لو الغرفة بتتبعت من غير سراير، ننشئهم أوتوماتيك بناءً على totalBeds
     if (!roomData.beds || roomData.beds.length === 0) {
       roomData.beds = [];
       const bedsCount = parseInt(roomData.totalBeds) || 1;

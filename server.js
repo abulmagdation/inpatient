@@ -2,314 +2,412 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
+const bcrypt = require('bcryptjs');
 
+// ==========================================
+// 1. الإعدادات الأساسية (Setup)
+// ==========================================
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const JWT_SECRET = process.env.JWT_SECRET || 'AbuAlMajdSuperSecretKey2026';
+const PORT = process.env.PORT || 5000;
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/inpatient_db';
+const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key';
+
+// الاتصال بقاعدة البيانات
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('✅ تم الاتصال بقاعدة البيانات بنجاح'))
+  .catch((err) => console.log('❌ خطأ في الاتصال بقاعدة البيانات:', err));
 
 // ==========================================
-// 1. Database Connection
+// 2. النماذج (Mongoose Models)
 // ==========================================
-mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://abulmagd:Abulmagd610@cluster0.blq59le.mongodb.net/hospital_ward?appName=Cluster0')
-  .then(() => {
-    console.log('✅ Connected to MongoDB Atlas');
-    seedInitialUser(); // إنشاء مستخدم افتراضي لو الداتا بيز فاضية
-  })
-  .catch(err => console.error(err));
 
-// ==========================================
-// 2. Models
-// ==========================================
+// --- موديل المستخدم ---
 const userSchema = new mongoose.Schema({
-  username: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
   name: { type: String, required: true },
-  theme: { type: String, enum: ['light', 'dark'], default: 'light' }
+  username: { type: String, required: true, unique: true, lowercase: true },
+  password: { type: String, required: true },
+  theme: { type: String, default: 'light' }
 }, { timestamps: true });
 const User = mongoose.model('User', userSchema);
 
+// --- موديل الغرف ---
 const bedSchema = new mongoose.Schema({
-  bedNumber: String,
-  isOccupied: { type: Boolean, default: false },
-  patient: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient', default: null }
+  bedNumber: { type: String, required: true },
+  isOccupied: { type: Boolean, default: false }
 });
-
 const roomSchema = new mongoose.Schema({
   roomNumber: { type: String, required: true, unique: true },
   floor: { type: String, required: true },
-  totalBeds: { type: Number, required: true },
-  occupiedBeds: { type: Number, default: 0 },
-  beds: [bedSchema],
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } // تتبع المنشئ
+  totalBeds: { type: Number, required: true, min: 1 },
+  beds: [bedSchema]
 }, { timestamps: true });
 const Room = mongoose.model('Room', roomSchema);
 
+// --- موديل المرضى ---
 const tubeSchema = new mongoose.Schema({
-  type: String, location: String, insertionDate: Date, removalDate: Date
+  type: String,
+  location: String,
+  insertionDate: Date,
+  removalDate: Date
 });
-
 const patientSchema = new mongoose.Schema({
   name: { type: String, required: true },
   medicalNumber: { type: String, required: true, unique: true },
   diagnosis: { type: String, required: true },
   doctorName: { type: String, required: true },
-  status: { type: String, enum: ['stable', 'fair', 'critical', 'discharged'], default: 'stable' },
-  room: { type: mongoose.Schema.Types.ObjectId, ref: 'Room' },
-  bedNumber: String,
-  admissionDate: { type: Date, required: true },
-  dischargeDate: { type: Date }, 
+  admissionDate: { type: Date, default: Date.now },
   nutrition: { type: String, default: 'اعتيادي' },
   medicalHistory: [String],
   tubes: [tubeSchema],
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } // تتبع المنشئ
+  room: { type: mongoose.Schema.Types.ObjectId, ref: 'Room' },
+  bedNumber: String,
+  status: { type: String, enum: ['active', 'discharged'], default: 'active' }
 }, { timestamps: true });
 const Patient = mongoose.model('Patient', patientSchema);
 
-const vitalSignsSchema = new mongoose.Schema({
+// --- موديل العلامات الحيوية ---
+const vitalSchema = new mongoose.Schema({
   patient: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient', required: true },
-  recordedAt: { type: Date, required: true },
-  heartRate: { type: Number, required: true }, systolicBP: { type: Number, required: true },
-  diastolicBP: { type: Number, required: true }, temperature: { type: Number, required: true },
-  oxygenSaturation: { type: Number, required: true }, respiratoryRate: { type: Number, required: true },
-  bloodSugar: { type: Number },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' } 
-});
-const VitalSigns = mongoose.model('VitalSigns', vitalSignsSchema);
+  heartRate: String,
+  systolicBP: String,
+  diastolicBP: String,
+  temperature: String,
+  respiratoryRate: String,
+  oxygenSaturation: String,
+  bloodSugar: String,
+  recordedAt: { type: Date, default: Date.now },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+}, { timestamps: true });
+const Vital = mongoose.model('Vital', vitalSchema);
 
+// --- موديل الأدوية ---
 const medicationSchema = new mongoose.Schema({
   patient: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient', required: true },
-  name: { type: String, required: true }, dose: { type: String, required: true }, route: { type: String, required: true },
-  addedAt: { type: Date, required: true }, frequency: { type: Number, required: true }, doseTimes: [{ type: Date, required: true }],
+  name: { type: String, required: true },
+  dose: { type: String, required: true },
+  route: { type: String, required: true },
+  frequency: { type: Number, required: true },
+  doseTimes: [Date],
+  addedAt: { type: Date, default: Date.now },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
-});
+}, { timestamps: true });
 const Medication = mongoose.model('Medication', medicationSchema);
 
-const nursingNoteSchema = new mongoose.Schema({
+// --- موديل الملاحظات التمريضية ---
+const noteSchema = new mongoose.Schema({
   patient: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient', required: true },
   text: { type: String, required: true },
-  recordedAt: { type: Date, required: true },
+  recordedAt: { type: Date, default: Date.now },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
-});
-const NursingNote = mongoose.model('NursingNote', nursingNoteSchema);
+}, { timestamps: true });
+const Note = mongoose.model('Note', noteSchema);
 
+// --- موديل المهام ---
 const taskSchema = new mongoose.Schema({
   patient: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient', required: true },
   text: { type: String, required: true },
   isCompleted: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now },
   targetDate: { type: Date, required: true },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
-});
+}, { timestamps: true });
 const Task = mongoose.model('Task', taskSchema);
 
 // ==========================================
-// 3. Authentication & Middleware
+// 3. ميدل وير الحماية (Auth Middleware)
 // ==========================================
-
-const seedInitialUser = async () => {
-  try {
-    const count = await User.countDocuments();
-    if (count === 0) {
-      const hashedPassword = await bcrypt.hash('123456', 10);
-      await new User({ username: 'admin', password: hashedPassword, name: 'عبدالرحمن أبو المجد', theme: 'light' }).save();
-      console.log('✅ تم إنشاء مستخدم افتراضي: Username: admin | Password: 123456');
+const protect = async (req, res, next) => {
+  let token;
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    try {
+      token = req.headers.authorization.split(' ')[1];
+      const decoded = jwt.verify(token, JWT_SECRET);
+      req.user = await User.findById(decoded.id).select('-password');
+      next();
+    } catch (error) {
+      return res.status(401).json({ error: 'غير مصرح لك، التوكن غير صالح' });
     }
-  } catch (e) { console.error('Error seeding user:', e); }
-};
-
-// دالة التحقق من التوكن (بوابة الأمان)
-const auth = (req, res, next) => {
-  const token = req.header('Authorization')?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ error: 'عفواً، يجب تسجيل الدخول أولاً' });
-  try {
-    const verified = jwt.verify(token, JWT_SECRET);
-    req.user = verified;
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'الجلسة انتهت أو غير صالحة، برجاء تسجيل الدخول مجدداً' });
+  }
+  if (!token) {
+    return res.status(401).json({ error: 'غير مصرح لك، لا يوجد توكن' });
   }
 };
 
-// مسار تسجيل الدخول
+const generateToken = (id) => {
+  return jwt.sign({ id }, JWT_SECRET, { expiresIn: '30d' });
+};
+
+// ==========================================
+// 4. المسارات والعمليات (Routes & Controllers)
+// ==========================================
+
+// ----- المصادقة والمستخدمين -----
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const user = await User.findOne({ username });
-    if (!user) return res.status(400).json({ error: 'بيانات الدخول غير صحيحة' });
-
-    const validPass = await bcrypt.compare(password, user.password);
-    if (!validPass) return res.status(400).json({ error: 'بيانات الدخول غير صحيحة' });
-
-    const token = jwt.sign({ id: user._id, name: user.name, theme: user.theme }, JWT_SECRET, { expiresIn: '30d' });
-    res.json({ token, user: { id: user._id, name: user.name, username: user.username, theme: user.theme } });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const user = await User.findOne({ username: username.toLowerCase() });
+    if (user && (await bcrypt.compare(password, user.password))) {
+      res.json({
+        user: { _id: user._id, name: user.name, username: user.username, theme: user.theme },
+        token: generateToken(user._id)
+      });
+    } else {
+      res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+    }
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// مسار حفظ وتحديث الثيم في الداتا بيز
-app.put('/api/users/theme', auth, async (req, res) => {
+app.put('/api/users/theme', protect, async (req, res) => {
   try {
-    const { theme } = req.body;
-    await User.findByIdAndUpdate(req.user.id, { theme });
-    res.json({ success: true, theme });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+    const user = await User.findById(req.user._id);
+    if (user) {
+      user.theme = req.body.theme;
+      await user.save();
+      res.json({ message: 'تم تحديث المظهر' });
+    } else { res.status(404).json({ error: 'المستخدم غير موجود' }); }
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-
-// ==========================================
-// 4. API Routes (Protected with `auth`)
-// ==========================================
-
-app.get('/api/patients', auth, async (req, res) => { 
-  res.json(await Patient.find().populate('room').populate('createdBy', 'name').sort('-createdAt')); 
-});
-
-app.post('/api/patients', auth, async (req, res) => {
+// 💡 الدالة الجديدة الخاصة بتحديث البروفايل
+app.put('/api/users/profile', protect, async (req, res) => {
   try {
-    const newPatient = new Patient({ ...req.body, createdBy: req.user.id }); // تسجيل مين اللي ضاف
-    await newPatient.save();
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
+
+    const { name, username, password } = req.body;
     
-    if (req.body.room && req.body.bedNumber) {
-      try {
-        await Room.findOneAndUpdate(
-          { _id: req.body.room, 'beds.bedNumber': req.body.bedNumber }, 
-          { $set: { 'beds.$.isOccupied': true, 'beds.$.patient': newPatient._id }, $inc: { occupiedBeds: 1 } }
-        );
-      } catch (roomErr) { console.error('خطأ مزامنة', roomErr); }
+    if (name) user.name = name;
+    if (username) user.username = username.toLowerCase();
+    
+    if (password && password.trim() !== '') {
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(password, salt);
     }
-    res.status(201).json(newPatient);
-  } catch (error) { res.status(400).json({ error: error.message }); }
+
+    await user.save();
+    res.json({
+      _id: user._id,
+      name: user.name,
+      username: user.username,
+      theme: user.theme,
+      token: generateToken(user._id) 
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ error: 'اسم المستخدم هذا مسجل مسبقاً، اختر اسماً آخر' });
+    }
+    res.status(500).json({ error: 'حدث خطأ أثناء تحديث البيانات' });
+  }
 });
 
-app.put('/api/patients/:id', auth, async (req, res) => { 
-  try { 
-    const oldPatient = await Patient.findById(req.params.id);
-    if (!oldPatient) return res.status(404).json({ error: 'Patient not found' });
-
-    const updatedPatient = await Patient.findByIdAndUpdate(req.params.id, req.body, { new: true }); 
-
-    const oldRoomId = oldPatient.room ? oldPatient.room.toString() : null;
-    const newRoomId = updatedPatient.room ? updatedPatient.room.toString() : null;
-    const oldBed = oldPatient.bedNumber;
-    const newBed = updatedPatient.bedNumber;
-
-    if (oldRoomId !== newRoomId || oldBed !== newBed) {
-      try {
-        if (oldRoomId && oldBed) {
-          await Room.findOneAndUpdate( { _id: oldRoomId, 'beds.bedNumber': oldBed }, { $set: { 'beds.$.isOccupied': false, 'beds.$.patient': null }, $inc: { occupiedBeds: -1 } } );
-        }
-        if (newRoomId && newBed) {
-          await Room.findOneAndUpdate( { _id: newRoomId, 'beds.bedNumber': newBed }, { $set: { 'beds.$.isOccupied': true, 'beds.$.patient': updatedPatient._id }, $inc: { occupiedBeds: 1 } } );
-        }
-      } catch (syncErr) { console.error('خطأ مزامنة نقل', syncErr); }
-    }
-    res.json(updatedPatient); 
-  } catch (error) { res.status(400).json({ error: error.message }); } 
+// ----- الغرف -----
+app.get('/api/rooms', protect, async (req, res) => {
+  try { const rooms = await Room.find(); res.json(rooms); } 
+  catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.patch('/api/patients/:id/discharge', auth, async (req, res) => {
+app.post('/api/rooms', protect, async (req, res) => {
   try {
-    const patient = await Patient.findById(req.params.id);
-    if (!patient) return res.status(404).json({error: 'Patient not found'});
-    if (patient.room && patient.bedNumber) {
-      await Room.findOneAndUpdate( { _id: patient.room, 'beds.bedNumber': patient.bedNumber }, { $set: { 'beds.$.isOccupied': false, 'beds.$.patient': null }, $inc: { occupiedBeds: -1 } } );
-    }
-    patient.status = 'discharged'; patient.dischargeDate = new Date();
-    patient.room = null; patient.bedNumber = null;
-    await patient.save(); res.json(patient);
+    const { roomNumber, floor, totalBeds } = req.body;
+    const beds = [];
+    for (let i = 1; i <= totalBeds; i++) { beds.push({ bedNumber: `${roomNumber}-${i}` }); }
+    const room = new Room({ roomNumber, floor, totalBeds, beds });
+    await room.save();
+    res.status(201).json(room);
   } catch (error) { res.status(400).json({ error: error.message }); }
 });
 
-app.post('/api/reports/shift', auth, async (req, res) => {
+app.put('/api/rooms/:id', protect, async (req, res) => {
+  try {
+    const { roomNumber, floor, totalBeds } = req.body;
+    const room = await Room.findById(req.params.id);
+    if (!room) return res.status(404).json({ error: 'الغرفة غير موجودة' });
+    
+    room.roomNumber = roomNumber || room.roomNumber;
+    room.floor = floor || room.floor;
+    
+    if (totalBeds && totalBeds > room.beds.length) {
+      const diff = totalBeds - room.beds.length;
+      for (let i = 1; i <= diff; i++) {
+        room.beds.push({ bedNumber: `${room.roomNumber}-${room.beds.length + 1}` });
+      }
+      room.totalBeds = totalBeds;
+    }
+    await room.save();
+    res.json(room);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.delete('/api/rooms/:id', protect, async (req, res) => {
+  try {
+    await Room.findByIdAndDelete(req.params.id);
+    res.json({ message: 'تم حذف الغرفة' });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ----- المرضى -----
+app.get('/api/patients', protect, async (req, res) => {
+  try {
+    const patients = await Patient.find({ status: 'active' }).populate('room');
+    res.json(patients);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/patients', protect, async (req, res) => {
+  try {
+    const patient = new Patient(req.body);
+    await patient.save();
+    res.status(201).json(patient);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.put('/api/patients/:id', protect, async (req, res) => {
+  try {
+    const patient = await Patient.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(patient);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.patch('/api/patients/:id/discharge', protect, async (req, res) => {
+  try {
+    const patient = await Patient.findByIdAndUpdate(req.params.id, { status: 'discharged', room: null, bedNumber: null }, { new: true });
+    res.json(patient);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+// ----- العلامات الحيوية -----
+app.get('/api/vitals/patient/:patientId', protect, async (req, res) => {
+  try {
+    const vitals = await Vital.find({ patient: req.params.patientId }).populate('createdBy', 'name').sort({ recordedAt: -1 });
+    res.json(vitals);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/vitals', protect, async (req, res) => {
+  try {
+    const vital = new Vital({ ...req.body, createdBy: req.user._id });
+    await vital.save();
+    res.status(201).json(vital);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.delete('/api/vitals/:id', protect, async (req, res) => {
+  try {
+    await Vital.findByIdAndDelete(req.params.id);
+    res.json({ message: 'تم حذف القراءة' });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ----- الأدوية -----
+app.get('/api/medications/patient/:patientId', protect, async (req, res) => {
+  try {
+    const meds = await Medication.find({ patient: req.params.patientId }).populate('createdBy', 'name').sort({ addedAt: -1 });
+    res.json(meds);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/medications', protect, async (req, res) => {
+  try {
+    const med = new Medication({ ...req.body, createdBy: req.user._id });
+    await med.save();
+    res.status(201).json(med);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.delete('/api/medications/:id', protect, async (req, res) => {
+  try {
+    await Medication.findByIdAndDelete(req.params.id);
+    res.json({ message: 'تم حذف الدواء' });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ----- الملاحظات التمريضية -----
+app.get('/api/notes/patient/:patientId', protect, async (req, res) => {
+  try {
+    const notes = await Note.find({ patient: req.params.patientId }).populate('createdBy', 'name').sort({ recordedAt: -1 });
+    res.json(notes);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/notes', protect, async (req, res) => {
+  try {
+    const note = new Note({ ...req.body, createdBy: req.user._id });
+    await note.save();
+    res.status(201).json(note);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+// ----- المهام -----
+app.get('/api/tasks/patient/:patientId', protect, async (req, res) => {
+  try {
+    const tasks = await Task.find({ patient: req.params.patientId }).populate('createdBy', 'name').sort({ targetDate: 1 });
+    res.json(tasks);
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/tasks', protect, async (req, res) => {
+  try {
+    const task = new Task({ ...req.body, createdBy: req.user._id });
+    await task.save();
+    res.status(201).json(task);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.put('/api/tasks/:id', protect, async (req, res) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'المهمة غير موجودة' });
+    task.isCompleted = req.body.isCompleted;
+    await task.save();
+    res.json(task);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+
+app.delete('/api/tasks/:id', protect, async (req, res) => {
+  try {
+    await Task.findByIdAndDelete(req.params.id);
+    res.json({ message: 'تم حذف المهمة' });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// ----- التقارير -----
+app.post('/api/reports/shift', protect, async (req, res) => {
   try {
     const { shiftDate } = req.body;
-    const startOfShift = new Date(shiftDate); startOfShift.setHours(8, 0, 0, 0);
-    const endOfShift = new Date(startOfShift); endOfShift.setDate(endOfShift.getDate() + 1);
-    const startOfNextShift = new Date(endOfShift);
-    const endOfNextShift = new Date(startOfNextShift); endOfNextShift.setDate(endOfNextShift.getDate() + 1);
+    const targetDate = new Date(shiftDate);
+    targetDate.setHours(8, 0, 0, 0);
+    const endDate = new Date(targetDate);
+    endDate.setDate(endDate.getDate() + 1);
 
-    const patients = await Patient.find({
-      admissionDate: { $lt: endOfShift },
-      $or: [ { dischargeDate: null }, { dischargeDate: { $exists: false } }, { dischargeDate: { $gte: endOfShift } } ]
-    }).populate('room');
+    const patients = await Patient.find({ status: 'active' }).populate('room');
+    
+    const reportData = await Promise.all(patients.map(async (p) => {
+      const notes = await Note.find({
+        patient: p._id,
+        recordedAt: { $gte: targetDate, $lt: endDate }
+      }).populate('createdBy', 'name').sort({ recordedAt: 1 });
 
-    const reportData = [];
-    for (const p of patients) {
-      const notes = await NursingNote.find({ patient: p._id, recordedAt: { $gte: startOfShift, $lt: endOfShift } }).populate('createdBy', 'name').sort('recordedAt');
-      const tasks = await Task.find({ patient: p._id, targetDate: { $gte: startOfNextShift, $lt: endOfNextShift } }).populate('createdBy', 'name').sort('createdAt');
-      reportData.push({ patient: p, notes, tasks });
-    }
+      const tasks = await Task.find({
+        patient: p._id,
+        $or: [
+          { createdAt: { $gte: targetDate, $lt: endDate } },
+          { targetDate: { $gte: targetDate, $lt: endDate } }
+        ]
+      }).populate('createdBy', 'name');
+
+      return { patient: p, notes, tasks };
+    }));
+
     res.json(reportData);
-  } catch (error) { res.status(400).json({ error: error.message }); }
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Routes related to user tracking insertion
-app.get('/api/vitals/patient/:patientId', auth, async (req, res) => { res.json(await VitalSigns.find({ patient: req.params.patientId }).populate('createdBy', 'name').sort('-recordedAt')); });
-app.post('/api/vitals', auth, async (req, res) => { try { const v = new VitalSigns({...req.body, createdBy: req.user.id}); await v.save(); res.status(201).json(v); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/vitals/:id', auth, async (req, res) => { await VitalSigns.findByIdAndDelete(req.params.id); res.json({ success: true }); });
-
-app.get('/api/medications/patient/:patientId', auth, async (req, res) => { res.json(await Medication.find({ patient: req.params.patientId }).populate('createdBy', 'name').sort('-addedAt')); });
-app.post('/api/medications', auth, async (req, res) => { try { const m = new Medication({...req.body, createdBy: req.user.id}); await m.save(); res.status(201).json(m); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/medications/:id', auth, async (req, res) => { try { res.json(await Medication.findByIdAndUpdate(req.params.id, req.body, {new: true})); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/medications/:id', auth, async (req, res) => { await Medication.findByIdAndDelete(req.params.id); res.json({ success: true }); });
-
-app.get('/api/rooms', auth, async (req, res) => { res.json(await Room.find().populate('beds.patient').populate('createdBy', 'name')); });
-app.post('/api/rooms', auth, async (req, res) => { 
-  try { 
-    const roomData = req.body;
-    if (!roomData.beds || roomData.beds.length === 0) {
-      roomData.beds = [];
-      const bedsCount = parseInt(roomData.totalBeds) || 1;
-      for (let i = 1; i <= bedsCount; i++) {
-        roomData.beds.push({ bedNumber: `${roomData.roomNumber}-${i}`, isOccupied: false, patient: null });
-      }
-    }
-    const r = new Room({...roomData, createdBy: req.user.id}); 
-    await r.save(); 
-    res.status(201).json(r); 
-  } catch (e) { res.status(400).json({ error: e.message }); } 
+// ==========================================
+// 5. تشغيل السيرفر
+// ==========================================
+app.listen(PORT, () => {
+  console.log(`🚀 السيرفر يعمل على بورت ${PORT}`);
 });
-app.put('/api/rooms/:id', auth, async (req, res) => {
-  try {
-    const room = await Room.findById(req.params.id);
-    const newTotal = parseInt(req.body.totalBeds);
-    if (newTotal < room.occupiedBeds) return res.status(400).json({error: 'لا يمكن تقليل الأسرة لعدد أقل من المرضى المحجوزين'});
-    room.roomNumber = req.body.roomNumber || room.roomNumber;
-    room.floor = req.body.floor || room.floor;
-    if (newTotal > room.totalBeds) {
-      for (let i = room.totalBeds + 1; i <= newTotal; i++) {
-        room.beds.push({ bedNumber: `${room.roomNumber}-${i}`, isOccupied: false, patient: null });
-      }
-    } else if (newTotal < room.totalBeds) {
-      let diff = room.totalBeds - newTotal;
-      for (let i = room.beds.length - 1; i >= 0 && diff > 0; i--) {
-        if (!room.beds[i].isOccupied) { room.beds.splice(i, 1); diff--; }
-      }
-    }
-    room.totalBeds = newTotal;
-    await room.save(); res.json(room);
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-app.delete('/api/rooms/:id', auth, async (req, res) => {
-  try {
-    const room = await Room.findById(req.params.id);
-    if (room.occupiedBeds > 0) return res.status(400).json({error: 'لا يمكن حذف غرفة بها مرضى محجوزين'});
-    await Room.findByIdAndDelete(req.params.id); res.json({ success: true });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-app.get('/api/notes/patient/:patientId', auth, async (req, res) => { res.json(await NursingNote.find({ patient: req.params.patientId }).populate('createdBy', 'name').sort('-recordedAt')); });
-app.post('/api/notes', auth, async (req, res) => { try { const n = new NursingNote({...req.body, createdBy: req.user.id}); await n.save(); res.status(201).json(n); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/notes/:id', auth, async (req, res) => { await NursingNote.findByIdAndDelete(req.params.id); res.json({ success: true }); });
-
-app.get('/api/tasks/patient/:patientId', auth, async (req, res) => { res.json(await Task.find({ patient: req.params.patientId }).populate('createdBy', 'name').sort('createdAt')); });
-app.post('/api/tasks', auth, async (req, res) => { try { const t = new Task({...req.body, createdBy: req.user.id}); await t.save(); res.status(201).json(t); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/tasks/:id', auth, async (req, res) => { try { res.json(await Task.findByIdAndUpdate(req.params.id, req.body, {new: true})); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.delete('/api/tasks/:id', auth, async (req, res) => { await Task.findByIdAndDelete(req.params.id); res.json({ success: true }); });
-
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

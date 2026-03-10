@@ -61,6 +61,16 @@ const patientSchema = new mongoose.Schema({
   diagnosis: { type: String, required: true },
   doctorName: { type: String, required: true },
   admissionDate: { type: Date, default: Date.now },
+  
+  // ==========================================
+  // الإضافات الجديدة
+  // ==========================================
+  dateOfBirth: { type: Date },
+  admissionSource: { type: String, enum: ['الطوارئ', 'مكتب الدخول'], default: 'الطوارئ' },
+  phoneNumber: { type: String },
+  nationalId: { type: String },
+  // ==========================================
+
   nutrition: { type: String, default: 'اعتيادي' },
   medicalHistory: [String],
   tubes: [tubeSchema],
@@ -172,7 +182,6 @@ app.put('/api/users/theme', protect, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// الدالة الخاصة بتحديث البروفايل (تعديل الاسم، اسم المستخدم، وكلمة المرور)
 app.put('/api/users/profile', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);

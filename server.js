@@ -31,12 +31,12 @@ const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true },
   theme: { type: String, default: 'light' },
-  // مصفوفة لحفظ التوكنز النشطة (عشان لو داخل من كذا موبايل، ومراقبة الجلسات)
-  tokens: [{ type: String }] 
+  // 🚀 التعديل هنا: حقل واحد بس للتوكن عشان نطبق نظام (Single Session)
+  token: { type: String, default: null } 
 }, { timestamps: true });
 const User = mongoose.model('User', userSchema);
 
-// --- باقي الموديلز (الغرف، المرضى، الحيوية، إلخ) ---
+// --- باقي الموديلز ---
 const bedSchema = new mongoose.Schema({ bedNumber: { type: String, required: true }, isOccupied: { type: Boolean, default: false } });
 const roomSchema = new mongoose.Schema({ roomNumber: { type: String, required: true, unique: true }, floor: { type: String, required: true }, totalBeds: { type: Number, required: true, min: 1 }, beds: [bedSchema] }, { timestamps: true });
 const Room = mongoose.model('Room', roomSchema);
@@ -62,29 +62,28 @@ const taskSchema = new mongoose.Schema({ patient: { type: mongoose.Schema.Types.
 const Task = mongoose.model('Task', taskSchema);
 
 // ==========================================
-// 3. ميدل وير الحماية (Auth Middleware) المطور 🚀
+// 3. ميدل وير الحماية (Auth Middleware)
 // ==========================================
 const protect = async (req, res, next) => {
-  let token;
+  let requestToken;
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
     try {
-      token = req.headers.authorization.split(' ')[1];
-      const decoded = jwt.verify(token, JWT_SECRET);
+      requestToken = req.headers.authorization.split(' ')[1];
+      const decoded = jwt.verify(requestToken, JWT_SECRET);
       
       const user = await User.findById(decoded.id).select('-password');
       
-      // 1. فحص هل المستخدم ما زال موجوداً في الداتا بيز (لم يتم حذفه)؟
+      // فحص هل المستخدم موجود
       if (!user) {
         return res.status(401).json({ error: 'الحساب غير موجود، تم تسجيل الخروج.' });
       }
 
-      // 2. فحص هل التوكن المستخدم موجود في مصفوفة توكنز المستخدم؟ (حماية من التوكن المسروق أو المحذوف)
-      if (!user.tokens.includes(token)) {
-        return res.status(401).json({ error: 'الجلسة غير صالحة أو تم إنهاؤها، برجاء تسجيل الدخول مجدداً.' });
+      // 🚀 التعديل هنا: مطابقة التوكن اللي جاي مع التوكن اللي متخزن في الداتا بيز
+      if (user.token !== requestToken) {
+        return res.status(401).json({ error: 'تم تسجيل الدخول من جهاز آخر أو انتهت الجلسة.' });
       }
 
       req.user = user;
-      req.token = token; // نحتفظ بالتوكن في الطلب عشان نقدر نحذفه في الـ Logout
       next();
     } catch (error) {
       return res.status(401).json({ error: 'غير مصرح لك، التوكن غير صالح أو انتهت صلاحيته' });
@@ -110,8 +109,8 @@ app.post('/api/login', async (req, res) => {
     if (user && (await bcrypt.compare(password, user.password))) {
       const token = generateToken(user._id);
       
-      // حفظ التوكن في الداتا بيز
-      user.tokens.push(token);
+      // 🚀 التعديل هنا: حفظ التوكن الجديد في الداتا بيز (وده بيمسح أي توكن قديم)
+      user.token = token;
       await user.save();
 
       res.json({
@@ -124,11 +123,11 @@ app.post('/api/login', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// مسار تسجيل الخروج (جديد) - لإنهاء الجلسة من الباك إند
+// مسار تسجيل الخروج - لمسح التوكن من الداتا بيز
 app.post('/api/logout', protect, async (req, res) => {
   try {
-    // إزالة التوكن الحالي من مصفوفة التوكنز للمستخدم
-    req.user.tokens = req.user.tokens.filter((t) => t !== req.token);
+    // 🚀 التعديل هنا: تفريغ حقل التوكن
+    req.user.token = null;
     await req.user.save();
     res.json({ message: 'تم تسجيل الخروج وإنهاء الجلسة بنجاح' });
   } catch (error) { res.status(500).json({ error: 'حدث خطأ أثناء تسجيل الخروج' }); }
@@ -154,7 +153,9 @@ app.put('/api/users/profile', protect, async (req, res) => {
     }
 
     const newToken = generateToken(req.user._id);
-    req.user.tokens.push(newToken); // حفظ التوكن الجديد
+    
+    // 🚀 التعديل هنا: تحديث التوكن بتوكن جديد بعد تعديل البيانات
+    req.user.token = newToken; 
     await req.user.save();
 
     res.json({

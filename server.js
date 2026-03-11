@@ -16,7 +16,6 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://abulmagd:Abulmagd610@cluster0.blq59le.mongodb.net/hospital_ward?appName=Cluster0';
 const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key';
 
-// الاتصال بقاعدة البيانات
 mongoose.connect(MONGO_URI)
   .then(() => console.log('✅ تم الاتصال بقاعدة بيانات Atlas بنجاح'))
   .catch((err) => console.log('❌ خطأ في الاتصال بقاعدة البيانات:', err));
@@ -25,13 +24,13 @@ mongoose.connect(MONGO_URI)
 // 2. النماذج (Mongoose Models)
 // ==========================================
 
-// --- موديل المستخدم ---
+// --- موديل المستخدم (مُحدث بالصلاحيات) ---
 const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
   username: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true },
   theme: { type: String, default: 'light' },
-  // 🚀 التعديل هنا: حقل واحد بس للتوكن عشان نطبق نظام (Single Session)
+  role: { type: String, enum: ['admin', 'user'], default: 'user' }, // 🚀 التعديل: إضافة الصلاحيات
   token: { type: String, default: null } 
 }, { timestamps: true });
 const User = mongoose.model('User', userSchema);
@@ -62,7 +61,7 @@ const taskSchema = new mongoose.Schema({ patient: { type: mongoose.Schema.Types.
 const Task = mongoose.model('Task', taskSchema);
 
 // ==========================================
-// 3. ميدل وير الحماية (Auth Middleware)
+// 3. ميدل وير الحماية والصلاحيات (Auth & Admin Middleware)
 // ==========================================
 const protect = async (req, res, next) => {
   let requestToken;
@@ -72,30 +71,25 @@ const protect = async (req, res, next) => {
       const decoded = jwt.verify(requestToken, JWT_SECRET);
       
       const user = await User.findById(decoded.id).select('-password');
-      
-      // فحص هل المستخدم موجود
-      if (!user) {
-        return res.status(401).json({ error: 'الحساب غير موجود، تم تسجيل الخروج.' });
-      }
-
-      // 🚀 التعديل هنا: مطابقة التوكن اللي جاي مع التوكن اللي متخزن في الداتا بيز
-      if (user.token !== requestToken) {
-        return res.status(401).json({ error: 'تم تسجيل الدخول من جهاز آخر أو انتهت الجلسة.' });
-      }
+      if (!user) return res.status(401).json({ error: 'الحساب غير موجود، تم تسجيل الخروج.' });
+      if (user.token !== requestToken) return res.status(401).json({ error: 'تم تسجيل الدخول من جهاز آخر أو انتهت الجلسة.' });
 
       req.user = user;
       next();
-    } catch (error) {
-      return res.status(401).json({ error: 'غير مصرح لك، التوكن غير صالح أو انتهت صلاحيته' });
-    }
+    } catch (error) { return res.status(401).json({ error: 'غير مصرح لك، التوكن غير صالح أو انتهت صلاحيته' }); }
+  } else { return res.status(401).json({ error: 'غير مصرح لك، لا يوجد توكن' }); }
+};
+
+// 🚀 التعديل: ميدل وير خاص بالمديرين فقط
+const admin = (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    next();
   } else {
-    return res.status(401).json({ error: 'غير مصرح لك، لا يوجد توكن' });
+    res.status(403).json({ error: 'غير مصرح لك، هذه الصلاحية للمديرين فقط' });
   }
 };
 
-const generateToken = (id) => {
-  return jwt.sign({ id }, JWT_SECRET, { expiresIn: '30d' });
-};
+const generateToken = (id) => { return jwt.sign({ id }, JWT_SECRET, { expiresIn: '30d' }); };
 
 // ==========================================
 // 4. المسارات والعمليات (Routes & Controllers)
@@ -108,37 +102,20 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ username: username.toLowerCase() });
     if (user && (await bcrypt.compare(password, user.password))) {
       const token = generateToken(user._id);
-      
-      // 🚀 التعديل هنا: حفظ التوكن الجديد في الداتا بيز (وده بيمسح أي توكن قديم)
-      user.token = token;
-      await user.save();
-
-      res.json({
-        user: { _id: user._id, name: user.name, username: user.username, theme: user.theme },
-        token: token
-      });
-    } else {
-      res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
-    }
+      user.token = token; await user.save();
+      res.json({ user: { _id: user._id, name: user.name, username: user.username, theme: user.theme, role: user.role }, token });
+    } else { res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' }); }
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// مسار تسجيل الخروج - لمسح التوكن من الداتا بيز
 app.post('/api/logout', protect, async (req, res) => {
-  try {
-    // 🚀 التعديل هنا: تفريغ حقل التوكن
-    req.user.token = null;
-    await req.user.save();
-    res.json({ message: 'تم تسجيل الخروج وإنهاء الجلسة بنجاح' });
-  } catch (error) { res.status(500).json({ error: 'حدث خطأ أثناء تسجيل الخروج' }); }
+  try { req.user.token = null; await req.user.save(); res.json({ message: 'تم تسجيل الخروج بنجاح' }); } 
+  catch (error) { res.status(500).json({ error: 'حدث خطأ أثناء تسجيل الخروج' }); }
 });
 
 app.put('/api/users/theme', protect, async (req, res) => {
-  try {
-    req.user.theme = req.body.theme;
-    await req.user.save();
-    res.json({ message: 'تم تحديث المظهر' });
-  } catch (error) { res.status(500).json({ error: error.message }); }
+  try { req.user.theme = req.body.theme; await req.user.save(); res.json({ message: 'تم تحديث المظهر' }); } 
+  catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.put('/api/users/profile', protect, async (req, res) => {
@@ -146,29 +123,56 @@ app.put('/api/users/profile', protect, async (req, res) => {
     const { name, username, password } = req.body;
     if (name) req.user.name = name;
     if (username) req.user.username = username.toLowerCase();
-    
-    if (password && password.trim() !== '') {
-      const salt = await bcrypt.genSalt(10);
-      req.user.password = await bcrypt.hash(password, salt);
-    }
-
-    const newToken = generateToken(req.user._id);
-    
-    // 🚀 التعديل هنا: تحديث التوكن بتوكن جديد بعد تعديل البيانات
-    req.user.token = newToken; 
-    await req.user.save();
-
-    res.json({
-      _id: req.user._id,
-      name: req.user.name,
-      username: req.user.username,
-      theme: req.user.theme,
-      token: newToken 
-    });
+    if (password && password.trim() !== '') { const salt = await bcrypt.genSalt(10); req.user.password = await bcrypt.hash(password, salt); }
+    const newToken = generateToken(req.user._id); req.user.token = newToken; await req.user.save();
+    res.json({ _id: req.user._id, name: req.user.name, username: req.user.username, theme: req.user.theme, role: req.user.role, token: newToken });
   } catch (error) {
     if (error.code === 11000) return res.status(400).json({ error: 'اسم المستخدم مسجل مسبقاً' });
     res.status(500).json({ error: 'حدث خطأ' });
   }
+});
+
+// 🚀 التعديل: مسارات لوحة تحكم المدير (Admin Panel)
+app.get('/api/users', protect, admin, async (req, res) => {
+  try { const users = await User.find({}).select('-password'); res.json(users); } 
+  catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.post('/api/users', protect, admin, async (req, res) => {
+  try {
+    const { name, username, password, role } = req.body;
+    const userExists = await User.findOne({ username: username.toLowerCase() });
+    if (userExists) return res.status(400).json({ error: 'اسم المستخدم موجود بالفعل' });
+    const salt = await bcrypt.genSalt(10); const hashedPassword = await bcrypt.hash(password, salt);
+    const user = await User.create({ name, username: username.toLowerCase(), password: hashedPassword, role: role || 'user' });
+    res.status(201).json({ _id: user._id, name: user.name, username: user.username, role: user.role });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.put('/api/users/:id', protect, admin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
+    const { name, username, password, role } = req.body;
+    user.name = name || user.name;
+    if (username) user.username = username.toLowerCase();
+    if (role) user.role = role;
+    if (password && password.trim() !== '') { const salt = await bcrypt.genSalt(10); user.password = await bcrypt.hash(password, salt); user.token = null; } // طرد إجباري عند تغيير الباسورد من الإدارة
+    await user.save();
+    res.json({ _id: user._id, name: user.name, username: user.username, role: user.role });
+  } catch (error) {
+    if (error.code === 11000) return res.status(400).json({ error: 'اسم المستخدم مسجل مسبقاً' });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/:id/logout', protect, admin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ error: 'المستخدم غير موجود' });
+    user.token = null; await user.save(); // مسح التوكن لطرد المستخدم فوراً
+    res.json({ message: 'تم طرد المستخدم وتسجيل خروجه بنجاح' });
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 // ----- الغرف -----
@@ -219,9 +223,4 @@ app.post('/api/reports/shift', protect, async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// ==========================================
-// 5. تشغيل السيرفر
-// ==========================================
-app.listen(PORT, () => {
-  console.log(`🚀 السيرفر يعمل على بورت ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 السيرفر يعمل على بورت ${PORT}`));

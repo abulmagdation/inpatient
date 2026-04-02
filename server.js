@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://abulmagd:Abulmagd610@cluster0.blq59le.mongodb.net/inpatient_db?appName=Cluster0';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://Abulmagd:Abulmagd610@cluster0.fac4uzx.mongodb.net/inpatient?appName=Cluster0';
 const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key';
 
 // ==========================================

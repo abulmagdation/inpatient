@@ -124,7 +124,7 @@ const checkRoomGenderAllowed = async (roomId, patientGender) => {
 // 🚀 مسار جلب لينك تحديث التطبيق
 app.get('/api/app-link', async (req, res) => {
   try {
-    res.json({ url: 'https://retalcare.com' }); 
+    res.json({ url: 'https://expo.dev/accounts/abulmagdation/projects/hospital-frontend/builds/966f833b-5f4d-4844-ba21-b79332318bd1' }); 
   } catch (error) {
     res.status(500).json({ error: 'تعذر جلب الرابط' });
   }
